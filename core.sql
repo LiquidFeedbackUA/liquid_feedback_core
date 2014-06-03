@@ -7,7 +7,7 @@
 BEGIN;
 
 CREATE VIEW "liquid_feedback_version" AS
-  SELECT * FROM (VALUES ('3.0.0', 3, 0, 0))
+  SELECT * FROM (VALUES ('3.0.2', 3, 0, 2))
   AS "subquery"("string", "major", "minor", "revision");
 
 
@@ -348,6 +348,17 @@ COMMENT ON COLUMN "session"."needs_delegation_check" IS 'Set to TRUE, if member 
 COMMENT ON COLUMN "session"."lang"              IS 'Language code of the selected language';
 
 
+CREATE TYPE "defeat_strength" AS ENUM ('simple', 'tuple');
+
+COMMENT ON TYPE "defeat_strength" IS 'How pairwise defeats are measured for the Schulze method: ''simple'' = only the number of winning votes, ''tuple'' = primarily the number of winning votes, secondarily the number of losing votes';
+
+
+CREATE TYPE "tie_breaking" AS ENUM ('simple', 'variant1', 'variant2');
+
+COMMENT ON TYPE "tie_breaking" IS 'Tie-breaker for the Schulze method: ''simple'' = only initiative ids are used, ''variant1'' = use initiative ids in variant 1 for tie breaking of the links (TBRL) and sequentially forbid shared links, ''variant2'' = use initiative ids in variant 2 for tie breaking of the links (TBRL) and sequentially forbid shared links';
+
+
+
 CREATE TABLE "policy" (
         "id"                    SERIAL4         PRIMARY KEY,
         "index"                 INT4            NOT NULL,
@@ -363,6 +374,8 @@ CREATE TABLE "policy" (
         "issue_quorum_den"      INT4,
         "initiative_quorum_num" INT4            NOT NULL,
         "initiative_quorum_den" INT4            NOT NULL,
+        "defeat_strength"     "defeat_strength" NOT NULL DEFAULT 'tuple',
+        "tie_breaking"          "tie_breaking"  NOT NULL DEFAULT 'variant1',
         "direct_majority_num"           INT4    NOT NULL DEFAULT 1,
         "direct_majority_den"           INT4    NOT NULL DEFAULT 2,
         "direct_majority_strict"        BOOLEAN NOT NULL DEFAULT TRUE,
@@ -373,7 +386,7 @@ CREATE TABLE "policy" (
         "indirect_majority_strict"      BOOLEAN NOT NULL DEFAULT TRUE,
         "indirect_majority_positive"    INT4    NOT NULL DEFAULT 0,
         "indirect_majority_non_negative" INT4   NOT NULL DEFAULT 0,
-        "no_reverse_beat_path"          BOOLEAN NOT NULL DEFAULT TRUE,
+        "no_reverse_beat_path"          BOOLEAN NOT NULL DEFAULT FALSE,
         "no_multistage_majority"        BOOLEAN NOT NULL DEFAULT FALSE,
         CONSTRAINT "timing" CHECK (
           ( "polling" = FALSE AND
@@ -387,7 +400,10 @@ CREATE TABLE "policy" (
             "verification_time" ISNULL AND "voting_time" ISNULL ) ),
         CONSTRAINT "issue_quorum_if_and_only_if_not_polling" CHECK (
           "polling" = "issue_quorum_num" ISNULL AND
-          "polling" = "issue_quorum_den" ISNULL ) );
+          "polling" = "issue_quorum_den" ISNULL ),
+        CONSTRAINT "no_reverse_beat_path_requires_tuple_defeat_strength" CHECK (
+          "defeat_strength" = 'tuple'::"defeat_strength" OR
+          "no_reverse_beat_path" = FALSE ) );
 CREATE INDEX "policy_active_idx" ON "policy" ("active");
 
 COMMENT ON TABLE "policy" IS 'Policies for a particular proceeding type (timelimits, quorum)';
@@ -403,6 +419,8 @@ COMMENT ON COLUMN "policy"."issue_quorum_num"      IS   'Numerator of potential 
 COMMENT ON COLUMN "policy"."issue_quorum_den"      IS 'Denominator of potential supporter quorum to be reached by one initiative of an issue to be "accepted" and enter issue state ''discussion''';
 COMMENT ON COLUMN "policy"."initiative_quorum_num" IS   'Numerator of satisfied supporter quorum  to be reached by an initiative to be "admitted" for voting';
 COMMENT ON COLUMN "policy"."initiative_quorum_den" IS 'Denominator of satisfied supporter quorum to be reached by an initiative to be "admitted" for voting';
+COMMENT ON COLUMN "policy"."defeat_strength"       IS 'How pairwise defeats are measured for the Schulze method; see type "defeat_strength"; ''tuple'' is the recommended setting';
+COMMENT ON COLUMN "policy"."tie_breaking"          IS 'Tie-breaker for the Schulze method; see type "tie_breaking"; ''variant1'' or ''variant2'' are recommended';
 COMMENT ON COLUMN "policy"."direct_majority_num"            IS 'Numerator of fraction of neccessary direct majority for initiatives to be attainable as winner';
 COMMENT ON COLUMN "policy"."direct_majority_den"            IS 'Denominator of fraction of neccessary direct majority for initaitives to be attainable as winner';
 COMMENT ON COLUMN "policy"."direct_majority_strict"         IS 'If TRUE, then the direct majority must be strictly greater than "direct_majority_num"/"direct_majority_den", otherwise it may also be equal.';
@@ -413,8 +431,8 @@ COMMENT ON COLUMN "policy"."indirect_majority_den"          IS 'Denominator of f
 COMMENT ON COLUMN "policy"."indirect_majority_strict"       IS 'If TRUE, then the indirect majority must be strictly greater than "indirect_majority_num"/"indirect_majority_den", otherwise it may also be equal.';
 COMMENT ON COLUMN "policy"."indirect_majority_positive"     IS 'Absolute number of votes in favor of the winner neccessary in a beat path to the status quo for an initaitive to be attainable as winner';
 COMMENT ON COLUMN "policy"."indirect_majority_non_negative" IS 'Absolute number of sum of votes in favor and abstentions in a beat path to the status quo for an initiative to be attainable as winner';
-COMMENT ON COLUMN "policy"."no_reverse_beat_path"  IS 'Causes initiatives with "reverse_beat_path" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."reverse_beat_path". This option ensures both that a winning initiative is never tied in a (weak) condorcet paradox with the status quo and a winning initiative always beats the status quo directly with a simple majority.';
-COMMENT ON COLUMN "policy"."no_multistage_majority" IS 'Causes initiatives with "multistage_majority" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."multistage_majority". This disqualifies initiatives which could cause an instable result. An instable result in this meaning is a result such that repeating the ballot with same preferences but with the winner of the first ballot as status quo would lead to a different winner in the second ballot. If there are no direct majorities required for the winner, or if in direct comparison only simple majorities are required and "no_reverse_beat_path" is true, then results are always stable and this flag does not have any effect on the winner (but still affects the "eligible" flag of an "initiative").';
+COMMENT ON COLUMN "policy"."no_reverse_beat_path" IS 'EXPERIMENTAL FEATURE: Causes initiatives with "reverse_beat_path" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."reverse_beat_path". This option ensures both that a winning initiative is never tied in a (weak) condorcet paradox with the status quo and a winning initiative always beats the status quo directly with a simple majority.';
+COMMENT ON COLUMN "policy"."no_multistage_majority" IS 'EXPERIMENTAL FEATURE: Causes initiatives with "multistage_majority" flag to not be "eligible", thus disallowing them to be winner. See comment on column "initiative"."multistage_majority". This disqualifies initiatives which could cause an instable result. An instable result in this meaning is a result such that repeating the ballot with same preferences but with the winner of the first ballot as status quo would lead to a different winner in the second ballot. If there are no direct majorities required for the winner, or if in direct comparison only simple majorities are required and "no_reverse_beat_path" is true, then results are always stable and this flag does not have any effect on the winner (but still affects the "eligible" flag of an "initiative").';
 
 
 CREATE TABLE "unit" (
@@ -646,6 +664,7 @@ CREATE TABLE "initiative" (
         "satisfied_informed_supporter_count" INT4,
         "harmonic_weight"       NUMERIC(12, 3),
         "final_suggestion_order_calculated" BOOLEAN NOT NULL DEFAULT FALSE,
+        "first_preference_votes" INT4,
         "positive_votes"        INT4,
         "negative_votes"        INT4,
         "direct_majority"       BOOLEAN,
@@ -667,7 +686,8 @@ CREATE TABLE "initiative" (
           CHECK ("revoked" ISNULL OR "admitted" ISNULL),
         CONSTRAINT "non_admitted_initiatives_cant_contain_voting_results" CHECK (
           ( "admitted" NOTNULL AND "admitted" = TRUE ) OR
-          ( "positive_votes" ISNULL AND "negative_votes" ISNULL AND
+          ( "first_preference_votes" ISNULL AND
+            "positive_votes" ISNULL AND "negative_votes" ISNULL AND
             "direct_majority" ISNULL AND "indirect_majority" ISNULL AND
             "schulze_rank" ISNULL AND
             "better_than_status_quo" ISNULL AND "worse_than_status_quo" ISNULL AND
@@ -703,14 +723,15 @@ COMMENT ON COLUMN "initiative"."satisfied_supporter_count"          IS 'Calculat
 COMMENT ON COLUMN "initiative"."satisfied_informed_supporter_count" IS 'Calculated from table "direct_supporter_snapshot"';
 COMMENT ON COLUMN "initiative"."harmonic_weight"        IS 'Indicates the relevancy of the initiative, calculated from the potential supporters weighted with the harmonic series to avoid a large number of clones affecting other initiative''s sorting positions too much; shall be used as secondary sorting key after "admitted" as primary sorting key';
 COMMENT ON COLUMN "initiative"."final_suggestion_order_calculated" IS 'Set to TRUE, when "proportional_order" of suggestions has been calculated the last time';
-COMMENT ON COLUMN "initiative"."positive_votes"         IS 'Calculated from table "direct_voter"';
-COMMENT ON COLUMN "initiative"."negative_votes"         IS 'Calculated from table "direct_voter"';
+COMMENT ON COLUMN "initiative"."first_preference_votes" IS 'Number of direct and delegating voters who ranked this initiative as their first choice';
+COMMENT ON COLUMN "initiative"."positive_votes"         IS 'Number of direct and delegating voters who ranked this initiative better than the status quo';
+COMMENT ON COLUMN "initiative"."negative_votes"         IS 'Number of direct and delegating voters who ranked this initiative worse than the status quo';
 COMMENT ON COLUMN "initiative"."direct_majority"        IS 'TRUE, if "positive_votes"/("positive_votes"+"negative_votes") is strictly greater or greater-equal than "direct_majority_num"/"direct_majority_den", and "positive_votes" is greater-equal than "direct_majority_positive", and ("positive_votes"+abstentions) is greater-equal than "direct_majority_non_negative"';
 COMMENT ON COLUMN "initiative"."indirect_majority"      IS 'Same as "direct_majority", but also considering indirect beat paths';
 COMMENT ON COLUMN "initiative"."schulze_rank"           IS 'Schulze-Ranking';
 COMMENT ON COLUMN "initiative"."better_than_status_quo" IS 'TRUE, if initiative has a schulze-ranking better than the status quo';
 COMMENT ON COLUMN "initiative"."worse_than_status_quo"  IS 'TRUE, if initiative has a schulze-ranking worse than the status quo (DEPRECATED, since schulze-ranking is unique per issue; use "better_than_status_quo"=FALSE)';
-COMMENT ON COLUMN "initiative"."reverse_beat_path"      IS 'TRUE, if there is a beat path (may include ties) from this initiative to the status quo';
+COMMENT ON COLUMN "initiative"."reverse_beat_path"      IS 'TRUE, if there is a beat path (may include ties) from this initiative to the status quo; set to NULL if "policy"."defeat_strength" is set to ''simple''';
 COMMENT ON COLUMN "initiative"."multistage_majority"    IS 'TRUE, if either (a) this initiative has no better rank than the status quo, or (b) there exists a better ranked initiative X, which directly beats this initiative, and either more voters prefer X to this initiative than voters preferring X to the status quo or less voters prefer this initiative to X than voters preferring the status quo to X';
 COMMENT ON COLUMN "initiative"."eligible"               IS 'Initiative has a "direct_majority" and an "indirect_majority", is "better_than_status_quo" and depending on selected policy the initiative has no "reverse_beat_path" or "multistage_majority"';
 COMMENT ON COLUMN "initiative"."winner"                 IS 'Winner is the "eligible" initiative with best "schulze_rank"';
@@ -1120,15 +1141,19 @@ CREATE TABLE "vote" (
         PRIMARY KEY ("initiative_id", "member_id"),
         "initiative_id"         INT4,
         "member_id"             INT4,
-        "grade"                 INT4,
+        "grade"                 INT4            NOT NULL,
+        "first_preference"      BOOLEAN,
         FOREIGN KEY ("issue_id", "initiative_id") REFERENCES "initiative" ("issue_id", "id") ON DELETE CASCADE ON UPDATE CASCADE,
-        FOREIGN KEY ("issue_id", "member_id") REFERENCES "direct_voter" ("issue_id", "member_id") ON DELETE CASCADE ON UPDATE CASCADE );
+        FOREIGN KEY ("issue_id", "member_id") REFERENCES "direct_voter" ("issue_id", "member_id") ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT "first_preference_flag_only_set_on_positive_grades"
+          CHECK ("grade" > 0 OR "first_preference" ISNULL) );
 CREATE INDEX "vote_member_id_idx" ON "vote" ("member_id");
 
 COMMENT ON TABLE "vote" IS 'Manual and delegated votes without abstentions; frontends must ensure that no votes are added modified or removed when the issue has been closed; for corrections refer to column "issue_notice" of "issue" table';
 
-COMMENT ON COLUMN "vote"."issue_id" IS 'WARNING: No index: For selections use column "initiative_id" and join via table "initiative" where neccessary';
-COMMENT ON COLUMN "vote"."grade"    IS 'Values smaller than zero mean reject, values greater than zero mean acceptance, zero or missing row means abstention. Preferences are expressed by different positive or negative numbers.';
+COMMENT ON COLUMN "vote"."issue_id"         IS 'WARNING: No index: For selections use column "initiative_id" and join via table "initiative" where neccessary';
+COMMENT ON COLUMN "vote"."grade"            IS 'Values smaller than zero mean reject, values greater than zero mean acceptance, zero or missing row means abstention. Preferences are expressed by different positive or negative numbers.';
+COMMENT ON COLUMN "vote"."first_preference" IS 'Value is automatically set after voting is finished. For positive grades, this value is set to true for the highest (i.e. best) grade.';
 
 
 CREATE TYPE "event_type" AS ENUM (
@@ -3736,6 +3761,27 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
       UPDATE "direct_voter" SET "weight" = 1
         WHERE "issue_id" = "issue_id_p";
       PERFORM "add_vote_delegations"("issue_id_p");
+      -- mark first preferences:
+      UPDATE "vote" SET "first_preference" = "subquery"."first_preference"
+        FROM (
+          SELECT
+            "vote"."initiative_id",
+            "vote"."member_id",
+            CASE WHEN "vote"."grade" > 0 THEN
+              CASE WHEN "vote"."grade" = max("agg"."grade") THEN TRUE ELSE FALSE END
+            ELSE NULL
+            END AS "first_preference"
+          FROM "vote"
+          JOIN "initiative"  -- NOTE: due to missing index on issue_id
+          ON "vote"."issue_id" = "initiative"."issue_id"
+          JOIN "vote" AS "agg"
+          ON "initiative"."id" = "agg"."initiative_id"
+          AND "vote"."member_id" = "agg"."member_id"
+          GROUP BY "vote"."initiative_id", "vote"."member_id"
+        ) AS "subquery"
+        WHERE "vote"."issue_id" = "issue_id_p"
+        AND "vote"."initiative_id" = "subquery"."initiative_id"
+        AND "vote"."member_id" = "subquery"."member_id";
       -- finish overriding protection triggers (avoids garbage):
       DELETE FROM "temporary_transaction_data"
         WHERE "key" = 'override_protection_triggers';
@@ -3758,6 +3804,20 @@ CREATE FUNCTION "close_voting"("issue_id_p" "issue"."id"%TYPE)
           FROM "direct_voter" WHERE "issue_id" = "issue_id_p"
         )
         WHERE "id" = "issue_id_p";
+      -- calculate "first_preference_votes":
+      UPDATE "initiative"
+        SET "first_preference_votes" = coalesce("subquery"."sum", 0)
+        FROM (
+          SELECT "vote"."initiative_id", sum("direct_voter"."weight")
+          FROM "vote" JOIN "direct_voter"
+          ON "vote"."issue_id" = "direct_voter"."issue_id"
+          AND "vote"."member_id" = "direct_voter"."member_id"
+          WHERE "vote"."first_preference"
+          GROUP BY "vote"."initiative_id"
+        ) AS "subquery"
+        WHERE "initiative"."issue_id" = "issue_id_p"
+        AND "initiative"."admitted"
+        AND "initiative"."id" = "subquery"."initiative_id";
       -- copy "positive_votes" and "negative_votes" from "battle" table:
       UPDATE "initiative" SET
         "positive_votes" = "battle_win"."count",
@@ -3779,92 +3839,83 @@ COMMENT ON FUNCTION "close_voting"
 
 
 CREATE FUNCTION "defeat_strength"
-  ( "positive_votes_p" INT4, "negative_votes_p" INT4 )
+  ( "positive_votes_p"  INT4,
+    "negative_votes_p"  INT4,
+    "defeat_strength_p" "defeat_strength" )
   RETURNS INT8
   LANGUAGE 'plpgsql' IMMUTABLE AS $$
     BEGIN
-      IF "positive_votes_p" > "negative_votes_p" THEN
-        RETURN ("positive_votes_p"::INT8 << 31) - "negative_votes_p"::INT8;
-      ELSIF "positive_votes_p" = "negative_votes_p" THEN
-        RETURN 0;
+      IF "defeat_strength_p" = 'simple'::"defeat_strength" THEN
+        IF "positive_votes_p" > "negative_votes_p" THEN
+          RETURN "positive_votes_p";
+        ELSE
+          RETURN 0;
+        END IF;
       ELSE
-        RETURN -1;
+        IF "positive_votes_p" > "negative_votes_p" THEN
+          RETURN ("positive_votes_p"::INT8 << 31) - "negative_votes_p"::INT8;
+        ELSIF "positive_votes_p" = "negative_votes_p" THEN
+          RETURN 0;
+        ELSE
+          RETURN -1;
+        END IF;
       END IF;
     END;
   $$;
 
-COMMENT ON FUNCTION "defeat_strength"(INT4, INT4) IS 'Calculates defeat strength (INT8!) of a pairwise defeat primarily by the absolute number of votes for the winner and secondarily by the absolute number of votes for the loser';
+COMMENT ON FUNCTION "defeat_strength"(INT4, INT4, "defeat_strength") IS 'Calculates defeat strength (INT8!) according to the "defeat_strength" option (see comment on type "defeat_strength")';
 
 
-CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
-  RETURNS VOID
-  LANGUAGE 'plpgsql' VOLATILE AS $$
-    DECLARE
-      "issue_row"         "issue"%ROWTYPE;
-      "policy_row"        "policy"%ROWTYPE;
-      "dimension_v"       INTEGER;
-      "vote_matrix"       INT4[][];  -- absolute votes
-      "matrix"            INT8[][];  -- defeat strength / best paths
-      "i"                 INTEGER;
-      "j"                 INTEGER;
-      "k"                 INTEGER;
-      "battle_row"        "battle"%ROWTYPE;
-      "rank_ary"          INT4[];
-      "rank_v"            INT4;
-      "initiative_id_v"   "initiative"."id"%TYPE;
+CREATE FUNCTION "secondary_link_strength"
+  ( "initiative1_ord_p" INT4,
+    "initiative2_ord_p" INT4,
+    "tie_breaking_p"   "tie_breaking" )
+  RETURNS INT8
+  LANGUAGE 'plpgsql' IMMUTABLE AS $$
     BEGIN
-      PERFORM "require_transaction_isolation"();
-      SELECT * INTO "issue_row"
-        FROM "issue" WHERE "id" = "issue_id_p";
-      SELECT * INTO "policy_row"
-        FROM "policy" WHERE "id" = "issue_row"."policy_id";
-      SELECT count(1) INTO "dimension_v"
-        FROM "battle_participant" WHERE "issue_id" = "issue_id_p";
-      -- Create "vote_matrix" with absolute number of votes in pairwise
-      -- comparison:
-      "vote_matrix" := array_fill(NULL::INT4, ARRAY["dimension_v", "dimension_v"]);
-      "i" := 1;
-      "j" := 2;
-      FOR "battle_row" IN
-        SELECT * FROM "battle" WHERE "issue_id" = "issue_id_p"
-        ORDER BY
-        "winning_initiative_id" NULLS FIRST,
-        "losing_initiative_id" NULLS FIRST
-      LOOP
-        "vote_matrix"["i"]["j"] := "battle_row"."count";
-        IF "j" = "dimension_v" THEN
-          "i" := "i" + 1;
-          "j" := 1;
-        ELSE
-          "j" := "j" + 1;
-          IF "j" = "i" THEN
-            "j" := "j" + 1;
-          END IF;
-        END IF;
-      END LOOP;
-      IF "i" != "dimension_v" OR "j" != "dimension_v" + 1 THEN
-        RAISE EXCEPTION 'Wrong battle count (should not happen)';
+      IF "initiative1_ord_p" = "initiative2_ord_p" THEN
+        RAISE EXCEPTION 'Identical initiative ids passed to "secondary_link_strength" function (should not happen)';
       END IF;
-      -- Store defeat strengths in "matrix" using "defeat_strength"
-      -- function:
-      "matrix" := array_fill(NULL::INT8, ARRAY["dimension_v", "dimension_v"]);
-      "i" := 1;
-      LOOP
-        "j" := 1;
-        LOOP
-          IF "i" != "j" THEN
-            "matrix"["i"]["j"] := "defeat_strength"(
-              "vote_matrix"["i"]["j"],
-              "vote_matrix"["j"]["i"]
-            );
-          END IF;
-          EXIT WHEN "j" = "dimension_v";
-          "j" := "j" + 1;
-        END LOOP;
-        EXIT WHEN "i" = "dimension_v";
-        "i" := "i" + 1;
-      END LOOP;
-      -- Find best paths:
+      RETURN (
+        CASE WHEN "tie_breaking_p" = 'simple'::"tie_breaking" THEN
+          0
+        ELSE
+          CASE WHEN "initiative1_ord_p" < "initiative2_ord_p" THEN
+            1::INT8 << 62
+          ELSE 0 END
+          +
+          CASE WHEN "tie_breaking_p" = 'variant2'::"tie_breaking" THEN
+            ("initiative2_ord_p"::INT8 << 31) - "initiative1_ord_p"::INT8
+          ELSE
+            "initiative2_ord_p"::INT8 - ("initiative1_ord_p"::INT8 << 31)
+          END
+        END
+      );
+    END;
+  $$;
+
+COMMENT ON FUNCTION "secondary_link_strength"(INT4, INT4, "tie_breaking") IS 'Calculates a secondary criterion for the defeat strength (tie-breaking of the links)';
+
+
+CREATE TYPE "link_strength" AS (
+        "primary"               INT8,
+        "secondary"             INT8 );
+
+COMMENT ON TYPE "link_strength" IS 'Type to store the defeat strength of a link between two candidates plus a secondary criterion to create unique link strengths between the candidates (needed for tie-breaking ''variant1'' and ''variant2'')';
+
+
+CREATE FUNCTION "find_best_paths"("matrix_d" "link_strength"[][])
+  RETURNS "link_strength"[][]
+  LANGUAGE 'plpgsql' IMMUTABLE AS $$
+    DECLARE
+      "dimension_v" INT4;
+      "matrix_p"    "link_strength"[][];
+      "i"           INT4;
+      "j"           INT4;
+      "k"           INT4;
+    BEGIN
+      "dimension_v" := array_upper("matrix_d", 1);
+      "matrix_p" := "matrix_d";
       "i" := 1;
       LOOP
         "j" := 1;
@@ -3873,13 +3924,13 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
             "k" := 1;
             LOOP
               IF "i" != "k" AND "j" != "k" THEN
-                IF "matrix"["j"]["i"] < "matrix"["i"]["k"] THEN
-                  IF "matrix"["j"]["i"] > "matrix"["j"]["k"] THEN
-                    "matrix"["j"]["k"] := "matrix"["j"]["i"];
+                IF "matrix_p"["j"]["i"] < "matrix_p"["i"]["k"] THEN
+                  IF "matrix_p"["j"]["i"] > "matrix_p"["j"]["k"] THEN
+                    "matrix_p"["j"]["k"] := "matrix_p"["j"]["i"];
                   END IF;
                 ELSE
-                  IF "matrix"["i"]["k"] > "matrix"["j"]["k"] THEN
-                    "matrix"["j"]["k"] := "matrix"["i"]["k"];
+                  IF "matrix_p"["i"]["k"] > "matrix_p"["j"]["k"] THEN
+                    "matrix_p"["j"]["k"] := "matrix_p"["i"]["k"];
                   END IF;
                 END IF;
               END IF;
@@ -3893,11 +3944,199 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
         EXIT WHEN "i" = "dimension_v";
         "i" := "i" + 1;
       END LOOP;
-      -- Determine order of winners:
+      RETURN "matrix_p";
+    END;
+  $$;
+
+COMMENT ON FUNCTION "find_best_paths"("link_strength"[][]) IS 'Computes the strengths of the best beat-paths from a square matrix';
+
+
+CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
+  RETURNS VOID
+  LANGUAGE 'plpgsql' VOLATILE AS $$
+    DECLARE
+      "issue_row"       "issue"%ROWTYPE;
+      "policy_row"      "policy"%ROWTYPE;
+      "dimension_v"     INT4;
+      "matrix_a"        INT4[][];  -- absolute votes
+      "matrix_d"        "link_strength"[][];  -- defeat strength (direct)
+      "matrix_p"        "link_strength"[][];  -- defeat strength (best path)
+      "matrix_t"        "link_strength"[][];  -- defeat strength (tie-breaking)
+      "matrix_f"        BOOLEAN[][];  -- forbidden link (tie-breaking)
+      "matrix_b"        BOOLEAN[][];  -- final order (who beats who)
+      "i"               INT4;
+      "j"               INT4;
+      "m"               INT4;
+      "n"               INT4;
+      "battle_row"      "battle"%ROWTYPE;
+      "rank_ary"        INT4[];
+      "rank_v"          INT4;
+      "initiative_id_v" "initiative"."id"%TYPE;
+    BEGIN
+      PERFORM "require_transaction_isolation"();
+      SELECT * INTO "issue_row"
+        FROM "issue" WHERE "id" = "issue_id_p";
+      SELECT * INTO "policy_row"
+        FROM "policy" WHERE "id" = "issue_row"."policy_id";
+      SELECT count(1) INTO "dimension_v"
+        FROM "battle_participant" WHERE "issue_id" = "issue_id_p";
+      -- create "matrix_a" with absolute number of votes in pairwise
+      -- comparison:
+      "matrix_a" := array_fill(NULL::INT4, ARRAY["dimension_v", "dimension_v"]);
+      "i" := 1;
+      "j" := 2;
+      FOR "battle_row" IN
+        SELECT * FROM "battle" WHERE "issue_id" = "issue_id_p"
+        ORDER BY
+        "winning_initiative_id" NULLS FIRST,
+        "losing_initiative_id" NULLS FIRST
+      LOOP
+        "matrix_a"["i"]["j"] := "battle_row"."count";
+        IF "j" = "dimension_v" THEN
+          "i" := "i" + 1;
+          "j" := 1;
+        ELSE
+          "j" := "j" + 1;
+          IF "j" = "i" THEN
+            "j" := "j" + 1;
+          END IF;
+        END IF;
+      END LOOP;
+      IF "i" != "dimension_v" OR "j" != "dimension_v" + 1 THEN
+        RAISE EXCEPTION 'Wrong battle count (should not happen)';
+      END IF;
+      -- store direct defeat strengths in "matrix_d" using "defeat_strength"
+      -- and "secondary_link_strength" functions:
+      "matrix_d" := array_fill(NULL::INT8, ARRAY["dimension_v", "dimension_v"]);
+      "i" := 1;
+      LOOP
+        "j" := 1;
+        LOOP
+          IF "i" != "j" THEN
+            "matrix_d"["i"]["j"] := (
+              "defeat_strength"(
+                "matrix_a"["i"]["j"],
+                "matrix_a"["j"]["i"],
+                "policy_row"."defeat_strength"
+              ),
+              "secondary_link_strength"(
+                "i",
+                "j",
+                "policy_row"."tie_breaking"
+              )
+            )::"link_strength";
+          END IF;
+          EXIT WHEN "j" = "dimension_v";
+          "j" := "j" + 1;
+        END LOOP;
+        EXIT WHEN "i" = "dimension_v";
+        "i" := "i" + 1;
+      END LOOP;
+      -- find best paths:
+      "matrix_p" := "find_best_paths"("matrix_d");
+      -- create partial order:
+      "matrix_b" := array_fill(NULL::BOOLEAN, ARRAY["dimension_v", "dimension_v"]);
+      "i" := 1;
+      LOOP
+        "j" := "i" + 1;
+        LOOP
+          IF "i" != "j" THEN
+            IF "matrix_p"["i"]["j"] > "matrix_p"["j"]["i"] THEN
+              "matrix_b"["i"]["j"] := TRUE;
+              "matrix_b"["j"]["i"] := FALSE;
+            ELSIF "matrix_p"["i"]["j"] < "matrix_p"["j"]["i"] THEN
+              "matrix_b"["i"]["j"] := FALSE;
+              "matrix_b"["j"]["i"] := TRUE;
+            END IF;
+          END IF;
+          EXIT WHEN "j" = "dimension_v";
+          "j" := "j" + 1;
+        END LOOP;
+        EXIT WHEN "i" = "dimension_v" - 1;
+        "i" := "i" + 1;
+      END LOOP;
+      -- tie-breaking by forbidding shared weakest links in beat-paths
+      -- (unless "tie_breaking" is set to 'simple', in which case tie-breaking
+      -- is performed later by initiative id):
+      IF "policy_row"."tie_breaking" != 'simple'::"tie_breaking" THEN
+        "m" := 1;
+        LOOP
+          "n" := "m" + 1;
+          LOOP
+            -- only process those candidates m and n, which are tied:
+            IF "matrix_b"["m"]["n"] ISNULL THEN
+              -- start with beat-paths prior tie-breaking:
+              "matrix_t" := "matrix_p";
+              -- start with all links allowed:
+              "matrix_f" := array_fill(FALSE, ARRAY["dimension_v", "dimension_v"]);
+              LOOP
+                -- determine (and forbid) that link that is the weakest link
+                -- in both the best path from candidate m to candidate n and
+                -- from candidate n to candidate m:
+                "i" := 1;
+                <<forbid_one_link>>
+                LOOP
+                  "j" := 1;
+                  LOOP
+                    IF "i" != "j" THEN
+                      IF "matrix_d"["i"]["j"] = "matrix_t"["m"]["n"] THEN
+                        "matrix_f"["i"]["j"] := TRUE;
+                        -- exit for performance reasons,
+                        -- as exactly one link will be found:
+                        EXIT forbid_one_link;
+                      END IF;
+                    END IF;
+                    EXIT WHEN "j" = "dimension_v";
+                    "j" := "j" + 1;
+                  END LOOP;
+                  IF "i" = "dimension_v" THEN
+                    RAISE EXCEPTION 'Did not find shared weakest link for tie-breaking (should not happen)';
+                  END IF;
+                  "i" := "i" + 1;
+                END LOOP;
+                -- calculate best beat-paths while ignoring forbidden links:
+                "i" := 1;
+                LOOP
+                  "j" := 1;
+                  LOOP
+                    IF "i" != "j" THEN
+                      "matrix_t"["i"]["j"] := CASE
+                         WHEN "matrix_f"["i"]["j"]
+                         THEN ((-1::INT8) << 63, 0)::"link_strength"  -- worst possible value
+                         ELSE "matrix_d"["i"]["j"] END;
+                    END IF;
+                    EXIT WHEN "j" = "dimension_v";
+                    "j" := "j" + 1;
+                  END LOOP;
+                  EXIT WHEN "i" = "dimension_v";
+                  "i" := "i" + 1;
+                END LOOP;
+                "matrix_t" := "find_best_paths"("matrix_t");
+                -- extend partial order, if tie-breaking was successful:
+                IF "matrix_t"["m"]["n"] > "matrix_t"["n"]["m"] THEN
+                  "matrix_b"["m"]["n"] := TRUE;
+                  "matrix_b"["n"]["m"] := FALSE;
+                  EXIT;
+                ELSIF "matrix_t"["m"]["n"] < "matrix_t"["n"]["m"] THEN
+                  "matrix_b"["m"]["n"] := FALSE;
+                  "matrix_b"["n"]["m"] := TRUE;
+                  EXIT;
+                END IF;
+              END LOOP;
+            END IF;
+            EXIT WHEN "n" = "dimension_v";
+            "n" := "n" + 1;
+          END LOOP;
+          EXIT WHEN "m" = "dimension_v" - 1;
+          "m" := "m" + 1;
+        END LOOP;
+      END IF;
+      -- store a unique ranking in "rank_ary":
       "rank_ary" := array_fill(NULL::INT4, ARRAY["dimension_v"]);
       "rank_v" := 1;
       LOOP
         "i" := 1;
+        <<assign_next_rank>>
         LOOP
           IF "rank_ary"["i"] ISNULL THEN
             "j" := 1;
@@ -3905,22 +4144,21 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
               IF
                 "i" != "j" AND
                 "rank_ary"["j"] ISNULL AND
-                ( "matrix"["j"]["i"] > "matrix"["i"]["j"] OR
+                ( "matrix_b"["j"]["i"] OR
                   -- tie-breaking by "id"
-                  ( "matrix"["j"]["i"] = "matrix"["i"]["j"] AND
+                  ( "matrix_b"["j"]["i"] ISNULL AND
                     "j" < "i" ) )
               THEN
                 -- someone else is better
                 EXIT;
               END IF;
-              "j" := "j" + 1;
-              IF "j" = "dimension_v" + 1 THEN
+              IF "j" = "dimension_v" THEN
                 -- noone is better
                 "rank_ary"["i"] := "rank_v";
-                EXIT;
+                EXIT assign_next_rank;
               END IF;
+              "j" := "j" + 1;
             END LOOP;
-            EXIT WHEN "j" = "dimension_v" + 1;
           END IF;
           "i" := "i" + 1;
           IF "i" > "dimension_v" THEN
@@ -3964,7 +4202,9 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
           "better_than_status_quo" = "rank_ary"["i"] < "rank_ary"[1],
           "worse_than_status_quo"  = "rank_ary"["i"] > "rank_ary"[1],
           "multistage_majority"    = "rank_ary"["i"] >= "rank_ary"[1],
-          "reverse_beat_path"      = "matrix"[1]["i"] >= 0,
+          "reverse_beat_path"      = CASE WHEN "policy_row"."defeat_strength" = 'simple'::"defeat_strength"
+                                     THEN NULL
+                                     ELSE "matrix_p"[1]["i"]."primary" >= 0 END,
           "eligible"               = FALSE,
           "winner"                 = FALSE,
           "rank"                   = NULL  -- NOTE: in cases of manual reset of issue state
@@ -4046,7 +4286,7 @@ CREATE FUNCTION "calculate_ranks"("issue_id_p" "issue"."id"%TYPE)
           "initiative"."multistage_majority" = FALSE )
         AND (
           "policy_row"."no_reverse_beat_path" = FALSE OR
-          "initiative"."reverse_beat_path" = FALSE );
+          coalesce("initiative"."reverse_beat_path", FALSE) = FALSE );
       -- mark final winner:
       UPDATE "initiative" SET "winner" = TRUE
         FROM (
